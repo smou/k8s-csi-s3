@@ -1,0 +1,180 @@
+---
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: s3-csi-node
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: minio-s3-csi-driver
+spec:
+  selector:
+    matchLabels:
+      app: s3-csi-node
+      app.kubernetes.io/name: minio-s3-csi-driver
+  template:
+    metadata:
+      labels:
+        app: s3-csi-node
+        app.kubernetes.io/name: minio-s3-csi-driver
+    spec:
+      nodeSelector:
+        kubernetes.io/os: linux
+      serviceAccountName: s3-csi-driver-sa
+      priorityClassName: system-node-critical
+
+      # hostPID=true is required to support Mountpoint semantics which require PID visibility
+      # Unfortunately, we cannot turn it on for OpenShift at this time.
+      # This is disabled when installing via Kustomize since it is not possible to know if the manifest is being applied to an OpenShift cluster or not.
+      # See tracking issue: https://github.com/awslabs/mountpoint-s3-csi-driver/issues/626
+      hostPID: false
+
+      containers:
+        - name: s3-plugin
+          image: csi-driver
+          securityContext:
+            # `privileged: true` grants all Kernel capabilities, runs as root, etc..
+            # Required for opening FUSE device and creating mounts.
+            # It may be possible to remove this and use the `capabilities` field,
+            # but Kubernetes API validator currently enforces that this is set to `true` for bidirectional mounts.
+            # https://github.com/kubernetes/kubernetes/blob/v1.34.2/pkg/apis/core/validation/validation.go#L1410-L1413
+            privileged: true
+            seLinuxOptions:
+              user: system_u
+              type: super_t
+              role: system_r
+              level: s0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --endpoint=$(CSI_ENDPOINT)
+            - --v=4
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:/var/lib/kubelet/plugins/s3.csi.aws.com/csi.sock
+            - name: KUBELET_PATH
+              value: /var/lib/kubelet
+            - name: CSI_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: HOST_PLUGIN_DIR
+              value: /var/lib/kubelet/plugins/s3.csi.aws.com/
+            - name: SUPPORT_LEGACY_SYSTEMD_MOUNTS
+              value: "true"
+            - name: MOUNTPOINT_NAMESPACE
+              value: mount-s3
+            - name: EKS_POD_IDENTITY_AGENT_CONTAINER_CREDENTIALS_FULL_URI
+              value: http://169.254.170.23/v1/credentials
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: aws-secret
+                  key: key_id
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aws-secret
+                  key: access_key
+                  optional: true
+            - name: AWS_SESSION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: aws-secret
+                  key: session_token
+                  optional: true
+          volumeMounts:
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+          ports:
+            - name: healthz
+              containerPort: 9808
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 10
+            timeoutSeconds: 3
+            periodSeconds: 2
+            failureThreshold: 5
+          resources:
+            limits:
+              memory: 256Mi
+            requests:
+              cpu: 10m
+              memory: 40Mi
+        # https://kubernetes-csi.github.io/docs/node-driver-registrar.html
+        - name: node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.15.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          args:
+            - "--v=5" # log level
+            - --csi-address=$(ADDRESS)
+            - --kubelet-registration-path=$(DRIVER_REG_SOCK_PATH)
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+            - name: DRIVER_REG_SOCK_PATH
+              value: /var/lib/kubelet/plugins/minio.s3.csi/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          livenessProbe:
+            exec:
+              command:
+                - /csi-node-driver-registrar
+                - --kubelet-registration-path=$(DRIVER_REG_SOCK_PATH)
+                - --mode=kubelet-registration-probe
+            initialDelaySeconds: 30
+            timeoutSeconds: 15
+            periodSeconds: 90
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+          resources:
+            limits:
+              memory: 256Mi
+            requests:
+              cpu: 10m
+              memory: 40Mi
+        # https://kubernetes-csi.github.io/docs/livenessprobe.html
+        - name: liveness-probe
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.17.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          args:
+            - --csi-address=$(ADDRESS)
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+          resources:
+            limits:
+              memory: 256Mi
+            requests:
+              cpu: 10m
+              memory: 40Mi
+      volumes:
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/minio.s3.csi/
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry/
+            type: Directory

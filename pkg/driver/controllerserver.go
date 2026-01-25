@@ -17,6 +17,13 @@ limitations under the License.
 package driver
 
 import (
+	"context"
+
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"k8s.io/klog/v2"
+
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -24,22 +31,13 @@ import (
 	"path"
 	"strings"
 
-	"github.com/golang/glog"
 	"github.com/smou/k8s-csi-s3/pkg/mounter"
 	"github.com/smou/k8s-csi-s3/pkg/s3"
-	"golang.org/x/net/context"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
-	"github.com/container-storage-interface/spec/lib/go/csi"
-	csicommon "github.com/kubernetes-csi/drivers/pkg/csi-common"
 )
 
-type controllerServer struct {
-	*csicommon.DefaultControllerServer
-}
+func (d *Driver) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+	klog.V(4).Infof("CreateVolume: called with args %#v", req)
 
-func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	params := req.GetParameters()
 	capacityBytes := int64(req.GetCapacityRange().GetRequiredBytes())
 	volumeID := sanitizeVolumeID(req.GetName())
@@ -53,11 +51,6 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		volumeID = path.Join(bucketName, prefix)
 	}
 
-	if err := cs.Driver.ValidateControllerServiceRequest(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME); err != nil {
-		glog.V(3).Infof("invalid create volume req: %v", req)
-		return nil, err
-	}
-
 	// Check arguments
 	if len(volumeID) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "Name missing in request")
@@ -66,7 +59,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Error(codes.InvalidArgument, "Volume Capabilities missing in request")
 	}
 
-	glog.V(4).Infof("Got a request to create volume %s", volumeID)
+	klog.V(4).Infof("Got a request to create volume %s", volumeID)
 
 	client, err := s3.NewClientFromSecret(req.GetSecrets())
 	if err != nil {
@@ -88,7 +81,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, fmt.Errorf("failed to create prefix %s: %v", prefix, err)
 	}
 
-	glog.V(4).Infof("create volume %s", volumeID)
+	klog.V(4).Infof("create volume %s", volumeID)
 	// DeleteVolume lacks VolumeContext, but publish&unpublish requests have it,
 	// so we don't need to store additional metadata anywhere
 	context := make(map[string]string)
@@ -105,7 +98,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}, nil
 }
 
-func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
+func (d *Driver) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	bucketName, prefix := volumeIDToBucketPrefix(volumeID)
 
@@ -114,11 +107,7 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
 	}
 
-	if err := cs.Driver.ValidateControllerServiceRequest(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME); err != nil {
-		glog.V(3).Infof("Invalid delete volume req: %v", req)
-		return nil, err
-	}
-	glog.V(4).Infof("Deleting volume %s", volumeID)
+	klog.V(4).Infof("Deleting volume %s", volumeID)
 
 	client, err := s3.NewClientFromSecret(req.GetSecrets())
 	if err != nil {
@@ -131,12 +120,12 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		if err := client.RemoveBucket(bucketName); err != nil && err.Error() != "The specified bucket does not exist" {
 			deleteErr = err
 		}
-		glog.V(4).Infof("Bucket %s removed", bucketName)
+		klog.V(4).Infof("Bucket %s removed", bucketName)
 	} else {
 		if err := client.RemovePrefix(bucketName, prefix); err != nil {
 			deleteErr = fmt.Errorf("unable to remove prefix: %w", err)
 		}
-		glog.V(4).Infof("Prefix %s removed", prefix)
+		klog.V(4).Infof("Prefix %s removed", prefix)
 	}
 
 	if deleteErr != nil {
@@ -146,7 +135,28 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	return &csi.DeleteVolumeResponse{}, nil
 }
 
-func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
+func (d *Driver) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+	klog.V(4).Infof("ControllerGetCapabilities: called with args %#v", req)
+	caps := []csi.ControllerServiceCapability_RPC_Type{
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+	}
+	var capsResponse []*csi.ControllerServiceCapability
+	for _, cap := range caps {
+		c := &csi.ControllerServiceCapability{
+			Type: &csi.ControllerServiceCapability_Rpc{
+				Rpc: &csi.ControllerServiceCapability_RPC{
+					Type: cap,
+				},
+			},
+		}
+		capsResponse = append(capsResponse, c)
+	}
+	return &csi.ControllerGetCapabilitiesResponse{Capabilities: capsResponse}, nil
+}
+
+func (d *Driver) ValidateVolumeCapabilities(ctx context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
+	klog.V(4).Infof("ValidateVolumeCapabilities: called with args %#v", req)
+
 	// Check arguments
 	if len(req.GetVolumeId()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
@@ -191,8 +201,16 @@ func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 	}, nil
 }
 
-func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
-	return &csi.ControllerExpandVolumeResponse{}, status.Error(codes.Unimplemented, "ControllerExpandVolume is not implemented")
+func (d *Driver) ListVolumes(ctx context.Context, req *csi.ListVolumesRequest) (*csi.ListVolumesResponse, error) {
+	klog.V(4).Infof("ListVolumes: called with args %#v", req)
+	//TODO might required for minio
+	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func (d *Driver) GetCapacity(ctx context.Context, req *csi.GetCapacityRequest) (*csi.GetCapacityResponse, error) {
+	klog.V(4).Infof("GetCapacity: called with args %#v", req)
+	//TODO might required for minio
+	return nil, status.Error(codes.Unimplemented, "")
 }
 
 func sanitizeVolumeID(volumeID string) string {

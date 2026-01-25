@@ -1,11 +1,11 @@
 /*
-Copyright 2017 The Kubernetes Authors.
+Copyright 2022 The Kubernetes Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+   http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,9 +17,32 @@ limitations under the License.
 package driver
 
 import (
-	csicommon "github.com/kubernetes-csi/drivers/pkg/csi-common"
+	"context"
+
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/smou/k8s-csi-s3/pkg/driver/version"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-type identityServer struct {
-	*csicommon.DefaultIdentityServer
+func (d *Driver) GetPluginInfo(ctx context.Context, req *csi.GetPluginInfoRequest) (*csi.GetPluginInfoResponse, error) {
+	resp := &csi.GetPluginInfoResponse{
+		Name:          driverName,
+		VendorVersion: version.GetVersion().DriverVersion,
+	}
+
+	return resp, nil
+}
+
+func (d *Driver) GetPluginCapabilities(ctx context.Context, req *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error) {
+	resp := &csi.GetPluginCapabilitiesResponse{
+		Capabilities: []*csi.PluginCapability{},
+	}
+
+	return resp, nil
+}
+
+func (d *Driver) Probe(ctx context.Context, req *csi.ProbeRequest) (*csi.ProbeResponse, error) {
+	return &csi.ProbeResponse{
+		Ready: wrapperspb.Bool(true),
+	}, nil
 }

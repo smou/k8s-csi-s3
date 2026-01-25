@@ -17,56 +17,47 @@ limitations under the License.
 package driver
 
 import (
+	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
 
-	"github.com/golang/glog"
+	"github.com/libopenstorage/openstorage/pkg/mount"
 	"github.com/smou/k8s-csi-s3/pkg/mounter"
 	"github.com/smou/k8s-csi-s3/pkg/s3"
-	"golang.org/x/net/context"
+	"k8s.io/klog/v2"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/kubernetes/pkg/util/mount"
-
-	csicommon "github.com/kubernetes-csi/drivers/pkg/csi-common"
+	// "k8s.io/kubernetes/pkg/util/mount"
 )
 
-type nodeServer struct {
-	*csicommon.DefaultNodeServer
+var (
+	nodeCaps = []csi.NodeServiceCapability_RPC_Type{
+		csi.NodeServiceCapability_RPC_VOLUME_MOUNT_GROUP,
+	}
+)
+
+type NodeServer struct {
+	NodeID  string
+	Mounter mounter.Mounter
 }
 
-func getMeta(bucketName, prefix string, context map[string]string) *s3.FSMeta {
-	mountOptions := make([]string, 0)
-	mountOptStr := context[mounter.OptionsKey]
-	if mountOptStr != "" {
-		re, _ := regexp.Compile(`([^\s"]+|"([^"\\]+|\\")*")+`)
-		re2, _ := regexp.Compile(`"([^"\\]+|\\")*"`)
-		re3, _ := regexp.Compile(`\\(.)`)
-		for _, opt := range re.FindAll([]byte(mountOptStr), -1) {
-			// Unquote options
-			opt = re2.ReplaceAllFunc(opt, func(q []byte) []byte {
-				return re3.ReplaceAll(q[1:len(q)-1], []byte("$1"))
-			})
-			mountOptions = append(mountOptions, string(opt))
-		}
-	}
-	capacity, _ := strconv.ParseInt(context["capacity"], 10, 64)
-	return &s3.FSMeta{
-		BucketName:    bucketName,
-		Prefix:        prefix,
-		Mounter:       context[mounter.TypeKey],
-		MountOptions:  mountOptions,
-		CapacityBytes: capacity,
-	}
+func NewNodeServer(nodeId string, mounter mounter.Mounter) *NodeServer {
+	return &NodeServer{NodeID: nodeId, Mounter: mounter}
 }
 
-func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+	klog.V(4).Infof("NodePublishVolume: new request: %+v", logSafeNodePublishVolumeRequest(req))
+
 	volumeID := req.GetVolumeId()
+	if len(volumeID) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "Volume ID not provided")
+	}
 	targetPath := req.GetTargetPath()
 	stagingTargetPath := req.GetStagingTargetPath()
 
@@ -118,23 +109,23 @@ func (ns *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	mountFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
 	attrib := req.GetVolumeContext()
 
-	glog.V(4).Infof("target %v\nreadonly %v\nvolumeId %v\nattributes %v\nmountflags %v\n",
+	klog.V(4).Infof("target %v\nreadonly %v\nvolumeId %v\nattributes %v\nmountflags %v\n",
 		targetPath, readOnly, volumeID, attrib, mountFlags)
 
 	cmd := exec.Command("mount", "--bind", stagingTargetPath, targetPath)
 	cmd.Stderr = os.Stderr
-	glog.V(3).Infof("Binding volume %v from %v to %v", volumeID, stagingTargetPath, targetPath)
+	klog.V(3).Infof("Binding volume %v from %v to %v", volumeID, stagingTargetPath, targetPath)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("Error running mount --bind %v %v: %s", stagingTargetPath, targetPath, out)
 	}
 
-	glog.V(4).Infof("s3: volume %s successfully mounted to %s", volumeID, targetPath)
+	klog.V(4).Infof("s3: volume %s successfully mounted to %s", volumeID, targetPath)
 
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
-func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
+func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	targetPath := req.GetTargetPath()
 
@@ -149,12 +140,12 @@ func (ns *nodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 	if err := mounter.Unmount(targetPath); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	glog.V(4).Infof("s3: volume %s has been unmounted.", volumeID)
+	klog.V(4).Infof("s3: volume %s has been unmounted.", volumeID)
 
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
-func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
+func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	stagingTargetPath := req.GetStagingTargetPath()
 	bucketName, prefix := volumeIDToBucketPrefix(volumeID)
@@ -196,7 +187,7 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	return &csi.NodeStageVolumeResponse{}, nil
 }
 
-func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
+func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
 	stagingTargetPath := req.GetStagingTargetPath()
 
@@ -222,30 +213,30 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 	if !exists {
 		err = mounter.FuseUnmount(stagingTargetPath)
 	}
-	glog.V(4).Infof("s3: volume %s has been unmounted from stage path %v.", volumeID, stagingTargetPath)
+	klog.V(4).Infof("s3: volume %s has been unmounted from stage path %v.", volumeID, stagingTargetPath)
 
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }
 
 // NodeGetCapabilities returns the supported capabilities of the node server
-func (ns *nodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+func (ns *NodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+	klog.V(4).Infof("NodeGetCapabilities: called with args %+v", req)
 	// currently there is a single NodeServer capability according to the spec
-	nscap := &csi.NodeServiceCapability{
-		Type: &csi.NodeServiceCapability_Rpc{
-			Rpc: &csi.NodeServiceCapability_RPC{
-				Type: csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
+	var capsResponse []*csi.NodeServiceCapability
+	for _, cap := range nodeCaps {
+		c := &csi.NodeServiceCapability{
+			Type: &csi.NodeServiceCapability_Rpc{
+				Rpc: &csi.NodeServiceCapability_RPC{
+					Type: cap,
+				},
 			},
-		},
+		}
+		capsResponse = append(capsResponse, c)
 	}
-
-	return &csi.NodeGetCapabilitiesResponse{
-		Capabilities: []*csi.NodeServiceCapability{
-			nscap,
-		},
-	}, nil
+	return &csi.NodeGetCapabilitiesResponse{Capabilities: capsResponse}, nil
 }
 
-func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
+func (ns *NodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
 	return &csi.NodeExpandVolumeResponse{}, status.Error(codes.Unimplemented, "NodeExpandVolume is not implemented")
 }
 
@@ -262,4 +253,45 @@ func checkMount(targetPath string) (bool, error) {
 		}
 	}
 	return notMnt, nil
+}
+
+func getMeta(bucketName, prefix string, context map[string]string) *s3.FSMeta {
+	mountOptions := make([]string, 0)
+	mountOptStr := context[mounter.OptionsKey]
+	if mountOptStr != "" {
+		re, _ := regexp.Compile(`([^\s"]+|"([^"\\]+|\\")*")+`)
+		re2, _ := regexp.Compile(`"([^"\\]+|\\")*"`)
+		re3, _ := regexp.Compile(`\\(.)`)
+		for _, opt := range re.FindAll([]byte(mountOptStr), -1) {
+			// Unquote options
+			opt = re2.ReplaceAllFunc(opt, func(q []byte) []byte {
+				return re3.ReplaceAll(q[1:len(q)-1], []byte("$1"))
+			})
+			mountOptions = append(mountOptions, string(opt))
+		}
+	}
+	capacity, _ := strconv.ParseInt(context["capacity"], 10, 64)
+	return &s3.FSMeta{
+		BucketName:    bucketName,
+		Prefix:        prefix,
+		Mounter:       context[mounter.TypeKey],
+		MountOptions:  mountOptions,
+		CapacityBytes: capacity,
+	}
+}
+
+// logSafeNodePublishVolumeRequest returns a copy of given `csi.NodePublishVolumeRequest`
+// with sensitive fields removed.
+func logSafeNodePublishVolumeRequest(req *csi.NodePublishVolumeRequest) *csi.NodePublishVolumeRequest {
+	safeVolumeContext := maps.Clone(req.VolumeContext)
+
+	return &csi.NodePublishVolumeRequest{
+		VolumeId:          req.VolumeId,
+		PublishContext:    req.PublishContext,
+		StagingTargetPath: req.StagingTargetPath,
+		TargetPath:        req.TargetPath,
+		VolumeCapability:  req.VolumeCapability,
+		Readonly:          req.Readonly,
+		VolumeContext:     safeVolumeContext,
+	}
 }

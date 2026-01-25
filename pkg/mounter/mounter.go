@@ -13,8 +13,10 @@ import (
 
 	systemd "github.com/coreos/go-systemd/v22/dbus"
 	"github.com/golang/glog"
+	"github.com/libopenstorage/openstorage/pkg/mount"
 	"github.com/mitchellh/go-ps"
-	"k8s.io/kubernetes/pkg/util/mount"
+
+	//"k8s.io/kubernetes/pkg/util/mount"
 
 	"github.com/smou/k8s-csi-s3/pkg/s3"
 )
@@ -80,12 +82,15 @@ func Unmount(path string) error {
 }
 
 func SystemdUnmount(volumeID string) (bool, error) {
-	conn, err := systemd.New()
+	conn, err := systemd.NewWithContext()
+	systemd.New()
 	if err != nil {
 		glog.Errorf("Failed to connect to systemd dbus service: %v", err)
 		return false, err
 	}
 	defer conn.Close()
+	unitName := "geesefs-" + systemd.PathBusEscape(volumeID) + ".service"
+	units, err := conn.ListUnitsByNames([]string{unitName})
 	unitName := "geesefs-" + systemd.PathBusEscape(volumeID) + ".service"
 	units, err := conn.ListUnitsByNames([]string{unitName})
 	glog.Errorf("Got %v", units)
