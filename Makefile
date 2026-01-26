@@ -28,14 +28,14 @@ test:
 	docker run --rm --privileged -v $(PWD):/build --device /dev/fuse $(TEST_IMAGE_TAG)
 container:
 	docker build -t $(IMAGE_TAG) .
-push: container
-	docker tag $(IMAGE_TAG) $(REGISTRY_NAME)/$(IMAGE_NAME):latest
-	docker tag $(IMAGE_TAG) $(REGISTRY_NAME)/$(IMAGE_NAME2):$(VERSION)
-	docker tag $(IMAGE_TAG) $(REGISTRY_NAME)/$(IMAGE_NAME2):latest
-	docker push $(IMAGE_TAG)
-	docker push $(REGISTRY_NAME)/$(IMAGE_NAME)
-	docker push $(REGISTRY_NAME)/$(IMAGE_NAME2)
-	docker push $(REGISTRY_NAME)/$(IMAGE_NAME2):$(VERSION)
+# push: container
+# 	docker tag $(IMAGE_TAG) $(REGISTRY_NAME)/$(IMAGE_NAME):latest
+# 	docker tag $(IMAGE_TAG) $(REGISTRY_NAME)/$(IMAGE_NAME2):$(VERSION)
+# 	docker tag $(IMAGE_TAG) $(REGISTRY_NAME)/$(IMAGE_NAME2):latest
+# 	docker push $(IMAGE_TAG)
+# 	docker push $(REGISTRY_NAME)/$(IMAGE_NAME)
+# 	docker push $(REGISTRY_NAME)/$(IMAGE_NAME2)
+# 	docker push $(REGISTRY_NAME)/$(IMAGE_NAME2):$(VERSION)
 clean:
 	go clean -r -x
 	-rm -rf _output
