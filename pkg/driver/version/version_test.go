@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/awslabs/mountpoint-s3-csi-driver/pkg/driver/version"
+	"github.com/smou/k8s-csi-s3/pkg/driver/version"
 )
 
 func TestGetVersion(t *testing.T) {
@@ -31,6 +31,7 @@ func TestGetVersionJSON(t *testing.T) {
 	}
 	expected := fmt.Sprintf(`{
   "driverVersion": "",
+  "driverName": "",
   "gitCommit": "",
   "buildDate": "",
   "goVersion": "%s",

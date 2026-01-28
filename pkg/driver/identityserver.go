@@ -20,20 +20,34 @@ import (
 	"context"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/smou/k8s-csi-s3/pkg/driver/version"
+	"github.com/smou/k8s-csi-s3/pkg/config"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-func (d *Driver) GetPluginInfo(ctx context.Context, req *csi.GetPluginInfoRequest) (*csi.GetPluginInfoResponse, error) {
+type IdentityServer struct {
+	csi.UnimplementedIdentityServer
+
+	DriverName    string
+	DriverVersion string
+}
+
+func NewIdentityServer(meta config.Meta) *IdentityServer {
+	return &IdentityServer{
+		DriverName:    meta.DriverName,
+		DriverVersion: meta.DriverVersion,
+	}
+}
+
+func (srv *IdentityServer) GetPluginInfo(ctx context.Context, req *csi.GetPluginInfoRequest) (*csi.GetPluginInfoResponse, error) {
 	resp := &csi.GetPluginInfoResponse{
-		Name:          driverName,
-		VendorVersion: version.GetVersion().DriverVersion,
+		Name:          srv.DriverName,
+		VendorVersion: srv.DriverVersion,
 	}
 
 	return resp, nil
 }
 
-func (d *Driver) GetPluginCapabilities(ctx context.Context, req *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error) {
+func (srv *IdentityServer) GetPluginCapabilities(ctx context.Context, req *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error) {
 	resp := &csi.GetPluginCapabilitiesResponse{
 		Capabilities: []*csi.PluginCapability{},
 	}
@@ -41,7 +55,7 @@ func (d *Driver) GetPluginCapabilities(ctx context.Context, req *csi.GetPluginCa
 	return resp, nil
 }
 
-func (d *Driver) Probe(ctx context.Context, req *csi.ProbeRequest) (*csi.ProbeResponse, error) {
+func (srv *IdentityServer) Probe(ctx context.Context, req *csi.ProbeRequest) (*csi.ProbeResponse, error) {
 	return &csi.ProbeResponse{
 		Ready: wrapperspb.Bool(true),
 	}, nil

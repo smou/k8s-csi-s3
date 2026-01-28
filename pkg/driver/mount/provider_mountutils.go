@@ -1,0 +1,103 @@
+package mount
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+
+	"k8s.io/klog/v2"
+	"k8s.io/mount-utils"
+)
+
+var ExecCommand = exec.CommandContext
+
+type MountUtilsProvider struct {
+	Mounter mount.Interface
+	// Pfad zum S3-Mount Binary (z. B. mountpoint-s3)
+	Binary string
+}
+
+func NewMountUtilsProvider(binary string) *MountUtilsProvider {
+	return &MountUtilsProvider{
+		Mounter: mount.New(""),
+		Binary:  binary,
+	}
+}
+
+func (p *MountUtilsProvider) IsMounted(targetPath string) (bool, error) {
+	klog.V(4).Infof("k8s-Mountutil IsMounted: called with targetPath %s", targetPath)
+	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+		klog.V(4).ErrorS(err, "k8s-Mountutil IsMounted: targetPath %s does not exist", targetPath)
+		return false, nil
+	}
+
+	notMounted, err := p.Mounter.IsLikelyNotMountPoint(targetPath)
+	if err != nil {
+		return false, err
+	}
+
+	return !notMounted, nil
+}
+
+func (p *MountUtilsProvider) Mount(ctx context.Context, req MountRequest) error {
+	klog.V(4).Infof("k8s-Mountutil Mount: called with args %+v", req)
+	if err := ensureDir(req.TargetPath); err != nil {
+		return err
+	}
+
+	mounted, err := p.IsMounted(req.TargetPath)
+	if err != nil {
+		return err
+	}
+	if mounted {
+		return nil
+	}
+
+	args := []string{
+		req.Bucket,
+		req.TargetPath,
+		"--endpoint-url", req.Endpoint,
+		"--region", req.Region,
+	}
+
+	if req.ReadOnly {
+		args = append(args, "--read-only")
+	}
+
+	cmd := ExecCommand(ctx, p.Binary, args...)
+
+	// Credentials über ENV (best practice)
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", req.AccessKey),
+		fmt.Sprintf("AWS_SECRET_ACCESS_KEY=%s", req.SecretKey),
+	)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf(
+			"mount failed: %w output=%s",
+			err,
+			string(out),
+		)
+	}
+
+	return nil
+}
+
+func (p *MountUtilsProvider) Unmount(ctx context.Context, targetPath string) error {
+	klog.V(4).Infof("k8s-Mountutil Unmount: called with targetPath %s", targetPath)
+	mounted, err := p.IsMounted(targetPath)
+	if err != nil {
+		return err
+	}
+	if !mounted {
+		return nil
+	}
+
+	return p.Mounter.Unmount(targetPath)
+}
+
+func ensureDir(path string) error {
+	return os.MkdirAll(path, 0755)
+}

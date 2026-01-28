@@ -10,6 +10,7 @@ import (
 // Populated during build-time in `Makefile`.
 var (
 	driverVersion string
+	driverName    string
 	gitCommit     string
 	buildDate     string
 )
@@ -17,6 +18,7 @@ var (
 // A VersionInfo represents build- and run-time version information of the driver.
 type VersionInfo struct {
 	DriverVersion string `json:"driverVersion"`
+	DriverName    string `json:"driverName"`
 	GitCommit     string `json:"gitCommit"`
 	BuildDate     string `json:"buildDate"`
 	GoVersion     string `json:"goVersion"`
@@ -28,6 +30,7 @@ type VersionInfo struct {
 func GetVersion() VersionInfo {
 	return VersionInfo{
 		DriverVersion: driverVersion,
+		DriverName:    driverName,
 		GitCommit:     gitCommit,
 		BuildDate:     buildDate,
 		GoVersion:     runtime.Version(),

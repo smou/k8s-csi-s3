@@ -17,10 +17,14 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/smou/k8s-csi-s3/pkg/config"
 	"github.com/smou/k8s-csi-s3/pkg/driver"
 )
 
@@ -29,17 +33,39 @@ func init() {
 }
 
 var (
-	endpoint = flag.String("endpoint", "unix://tmp/csi.sock", "CSI endpoint")
-	nodeID   = flag.String("nodeid", "", "node id")
+	endpoint    = flag.String("endpoint", "unix://tmp/csi.sock", "CSI endpoint")
+	nodeID      = flag.String("nodeid", "", "node id")
+	mountBinary = flag.String("mountBinary", "/usr/bin/mountpoint-s3", "s3 mount binary path")
 )
 
 func main() {
 	flag.Parse()
 
-	driver, err := driver.New(*nodeID, *endpoint)
+	ctx, cancel := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer cancel()
+
+	config, err := config.InitConfig(ctx)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error loading DriverConfig: %v", err)
 	}
-	driver.Run()
+	config.Endpoint = *endpoint
+	config.NodeID = *nodeID
+	config.MountBinary = *mountBinary
+
+	driver, err := driver.NewDriver(config)
+	if err != nil {
+		log.Fatalf("Error run Driver: %v", err)
+	}
+	go func() {
+		if err := driver.Run(); err != nil {
+			log.Fatalf("driver error: %v", err)
+		}
+	}()
+	<-ctx.Done()
+	driver.Stop()
 	os.Exit(0)
 }
