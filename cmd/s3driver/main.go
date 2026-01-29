@@ -35,9 +35,9 @@ func init() {
 }
 
 var (
-	endpoint    = flag.String("endpoint", "unix://tmp/csi.sock", "CSI endpoint")
+	endpoint    = flag.String("endpoint", "unix://csi/csi.sock", "CSI endpoint")
 	nodeID      = flag.String("nodeid", "controller", "kubernetes node id")
-	mountBinary = flag.String("mountBinary", "", "s3 mount binary path")
+	mountBinary = flag.String("mountBinary", "/bin/mount", "s3 mount binary path")
 )
 
 func main() {

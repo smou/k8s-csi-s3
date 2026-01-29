@@ -20,7 +20,10 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -34,8 +37,8 @@ import (
 )
 
 const (
-	//unixSocketPerm                  = os.FileMode(0700) // only owner can write and read.
-	grpcServerMaxReceiveMessageSize = 1024 * 1024 * 2 // 2MB
+	unixSocketPerm                  = os.FileMode(0700) // only owner can write and read.
+	grpcServerMaxReceiveMessageSize = 1024 * 1024 * 2   // 2MB
 )
 
 type Driver struct {
@@ -62,18 +65,31 @@ func NewDriver(config *config.DriverConfig) (*Driver, error) {
 
 func (d *Driver) Run() error {
 	klog.Infof("Starting CSI driver at %s", d.Config.Endpoint)
-	proto, addr, err := parseEndpoint(d.Config.Endpoint)
+	scheme, addr, err := parseEndpoint(d.Config.Endpoint)
 	if err != nil {
 		return err
 	}
 
-	if proto == "unix" {
-		if err := os.RemoveAll(addr); err != nil {
-			return fmt.Errorf("failed to remove socket %s: %w", addr, err)
-		}
-	}
+	// if scheme == "unix" {
+	// 	if err := os.RemoveAll(addr); err != nil {
+	// 		klog.Errorf("failed to remove socket %s: %v", addr, err)
+	// 	}
+	// 	// Go's `net` package does not support specifying permissions on Unix sockets it creates.
+	// 	// There are two ways to change permissions:
+	// 	// 	 - Using `syscall.Umask` before `net.Listen`
+	// 	//   - Calling `os.Chmod` after `net.Listen`
+	// 	// The first one is not nice because it affects all files created in the process,
+	// 	// the second one has a time-window where the permissions of Unix socket would depend on `umask`
+	// 	// between `net.Listen` and `os.Chmod`. Since we don't start accepting connections on the socket until
+	// 	// `grpc.Serve` call, we should be fine with `os.Chmod` option.
+	// 	// See https://github.com/golang/go/issues/11822#issuecomment-123850227.
+	// 	if err := os.Chmod(addr, unixSocketPerm); err != nil {
+	// 		klog.Errorf("Failed to change permissions on unix socket %s: %v", addr, err)
+	// 		return fmt.Errorf("Failed to change permissions on unix socket %s: %v", addr, err)
+	// 	}
+	// }
 
-	listener, err := net.Listen(proto, addr)
+	listener, err := net.Listen(scheme, addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", d.Config.Endpoint, err)
 	}
@@ -135,12 +151,25 @@ func (d *Driver) Stop() {
 	}
 }
 
-func parseEndpoint(ep string) (string, string, error) {
-	if strings.HasPrefix(ep, "unix://") {
-		return "unix", strings.TrimPrefix(ep, "unix://"), nil
+func parseEndpoint(endpoint string) (string, string, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", "", fmt.Errorf("could not parse endpoint: %v", err)
 	}
-	if strings.HasPrefix(ep, "tcp://") {
-		return "tcp", strings.TrimPrefix(ep, "tcp://"), nil
+
+	addr := path.Join(u.Host, filepath.FromSlash(u.Path))
+
+	scheme := strings.ToLower(u.Scheme)
+	switch scheme {
+	case "tcp":
+	case "unix":
+		addr = path.Join("/", addr)
+		if err := os.Remove(addr); err != nil && !os.IsNotExist(err) {
+			return "", "", fmt.Errorf("could not remove unix domain socket %q: %v", addr, err)
+		}
+	default:
+		return "", "", fmt.Errorf("unsupported protocol: %s", scheme)
 	}
-	return "", "", fmt.Errorf("unsupported endpoint: %s", ep)
+
+	return scheme, addr, nil
 }

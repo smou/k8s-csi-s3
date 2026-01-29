@@ -128,6 +128,7 @@ func (srv *ControllerServer) ControllerGetCapabilities(ctx context.Context, req 
 	klog.V(4).Infof("ControllerGetCapabilities: called with args %#v", req)
 	caps := []csi.ControllerServiceCapability_RPC_Type{
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
 	}
 	var capsResponse []*csi.ControllerServiceCapability
 	for _, cap := range caps {

@@ -48,11 +48,21 @@ func (srv *IdentityServer) GetPluginInfo(ctx context.Context, req *csi.GetPlugin
 }
 
 func (srv *IdentityServer) GetPluginCapabilities(ctx context.Context, req *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error) {
-	resp := &csi.GetPluginCapabilitiesResponse{
-		Capabilities: []*csi.PluginCapability{},
+	caps := []csi.PluginCapability_Service_Type{
+		csi.PluginCapability_Service_CONTROLLER_SERVICE,
 	}
-
-	return resp, nil
+	var capsResponse []*csi.PluginCapability
+	for _, cap := range caps {
+		c := &csi.PluginCapability{
+			Type: &csi.PluginCapability_Service_{
+				Service: &csi.PluginCapability_Service{
+					Type: cap,
+				},
+			},
+		}
+		capsResponse = append(capsResponse, c)
+	}
+	return &csi.GetPluginCapabilitiesResponse{Capabilities: capsResponse}, nil
 }
 
 func (srv *IdentityServer) Probe(ctx context.Context, req *csi.ProbeRequest) (*csi.ProbeResponse, error) {
