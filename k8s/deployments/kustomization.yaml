@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - controller.yaml
+  - node.yaml
+  - csidriver.yaml
+images:
+  - name: cshoch3/k8s-csi-s3-minio
+    newTag: 1.0.0-RC-a18d567f8091c7f5a13b808977ca9d1452ed6e0e

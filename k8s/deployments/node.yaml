@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: csi-s3-node
+  namespace: csi-s3
+spec:
+  selector:
+    matchLabels:
+      app: csi-s3-node
+  template:
+    metadata:
+      labels:
+        app: csi-s3-node
+    spec:
+      serviceAccountName: csi-s3
+      containers:
+        - name: csi-s3
+          image: cshoch3/k8s-csi-s3-minio:dev
+          args:
+            - "--endpoint=unix://$(CSI_ADDRESS)"
+            - "--nodeid=$(NODE_ID)"
+            - "--mountBinary=/bin/mount"
+          env:
+            - name: CSI_ADDRESS
+              value: /run/csi/csi.sock
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CONFIGMAP_NAME
+              value: csi-s3-config
+            - name: SECRET_NAME
+              value: csi-s3-secret
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            capabilities:
+              add: ["SYS_ADMIN"]
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /run/csi/
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+            - name: fuse
+              mountPath: /dev/fuse
+        - name: node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.10.0
+          args:
+            - "--csi-address=$(CSI_ADDRESS)"
+            - "--kubelet-registration-path=$(REGISTRATION_PATH)"
+            - "--v=5"
+          env:
+            - name: CSI_ADDRESS
+              value: /csi/csi.sock
+            - name: REGISTRATION_PATH
+              value: /var/lib/kubelet/plugins/minio.s3.csi/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+          - name: socket-dir
+            mountPath: /csi
+          - name: registration-dir
+            mountPath: /registration
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+      volumes:
+        - name: socket-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/minio.s3.csi/
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry/
+            type: Directory
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: fuse
+          hostPath:
+            path: /dev/fuse
+        
