@@ -54,16 +54,21 @@ func (p *MountUtilsProvider) Mount(ctx context.Context, req MountRequest) error 
 		return nil
 	}
 
+	options := []string{
+		"--endpoint-url", req.Endpoint,
+		"--region", req.Region,
+		"--force-path-style",
+	}
+	// --allow-delete Allow delete operations on file system
+	// --allow-overwrite Allow overwrite operations on file system
+	if req.ReadOnly {
+		options = append(options, "--read-only") // Mount file system in read-only mode
+	}
 	args := []string{
 		req.Bucket,
 		req.TargetPath,
-		"--endpoint-url", req.Endpoint,
-		"--region", req.Region,
 	}
-
-	if req.ReadOnly {
-		args = append(args, "--read-only")
-	}
+	options = append(options, args...)
 
 	cmd := ExecCommand(ctx, p.Binary, args...)
 
