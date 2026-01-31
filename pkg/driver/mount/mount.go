@@ -24,6 +24,7 @@ type MountRequest struct {
 	SecretKey string
 
 	ReadOnly bool
+	GID      string
 
 	Options map[string]string
 }

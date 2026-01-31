@@ -88,17 +88,25 @@ func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 		return nil, status.Errorf(codes.InvalidArgument, "Invalid credentials secret")
 	}
 
+	region := ""
+	if req.GetVolumeContext() != nil {
+		region = req.VolumeContext["region"]
+	}
+
+	gid := getGIDFromVolumeCapability(req.GetVolumeCapability())
+
 	mreq := mount.MountRequest{
 		TargetPath: req.TargetPath,
 
 		Bucket:   req.GetVolumeId(),
 		Endpoint: n.Endpoint,
-		Region:   req.VolumeContext["region"],
+		Region:   region,
 
 		AccessKey: n.AccessKey,
 		SecretKey: n.SecretKey,
 
-		ReadOnly: req.Readonly,
+		ReadOnly: false,
+		GID:      gid,
 		Options:  req.VolumeContext,
 	}
 
@@ -157,6 +165,8 @@ func (n *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolu
 		region = req.VolumeContext["region"]
 	}
 
+	gid := getGIDFromVolumeCapability(req.GetVolumeCapability())
+
 	mreq := mount.MountRequest{
 		TargetPath: req.StagingTargetPath,
 
@@ -168,6 +178,7 @@ func (n *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolu
 		SecretKey: n.SecretKey,
 
 		ReadOnly: false,
+		GID:      gid,
 		Options:  req.VolumeContext,
 	}
 
@@ -201,4 +212,17 @@ func (n *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstage
 	klog.V(1).Infof("volume %s unstaged from %s", req.VolumeId, req.StagingTargetPath)
 
 	return &csi.NodeUnstageVolumeResponse{}, nil
+}
+
+func getGIDFromVolumeCapability(volCap *csi.VolumeCapability) string {
+	if volCap != nil {
+		mountCap := volCap.GetMount()
+		if mountCap != nil {
+			group := mountCap.GetVolumeMountGroup()
+			if group != "" {
+				return group
+			}
+		}
+	}
+	return ""
 }

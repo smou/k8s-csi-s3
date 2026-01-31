@@ -59,7 +59,12 @@ func (p *MountUtilsProvider) Mount(ctx context.Context, req MountRequest) error 
 		"--endpoint-url", req.Endpoint,
 		"--region", req.Region,
 		"--force-path-style",
+		"--incremental-upload",
 	}
+	if req.GID != "" {
+		options = append(options, "--gid", req.GID)
+	}
+	// --gid Owner GID [default: current user's GID]
 	// --allow-delete Allow delete operations on file system
 	// --allow-overwrite Allow overwrite operations on file system
 	if req.ReadOnly {
