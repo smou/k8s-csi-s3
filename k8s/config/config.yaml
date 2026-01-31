@@ -3,8 +3,7 @@ kind: ConfigMap
 metadata:
   name: csi-s3-config
   namespace: csi-s3
+  labels:
+    app.kubernetes.io/part-of: minio-csi-s3
 data:
   MINIO_ENDPOINT: "https://aistor.lan.cschuetze.de"
-  MINIO_USETLS: "true"
-  MINIO_REGION: "us-east-1"
-  MINIO_BUCKET_PREFIX: "pvc-"

@@ -26,7 +26,8 @@ spec:
           args:
             - "--endpoint=unix://$(CSI_ADDRESS)"
             - "--nodeid=$(NODE_ID)"
-            - "--mountBinary=/bin/mount"
+            - "--mountBinary=/usr/local/bin/mount-s3"
+            - "--v=4"
           env:
             - name: CSI_ADDRESS
               value: /run/csi/socket

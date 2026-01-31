@@ -11,6 +11,7 @@ spec:
     metadata:
       labels:
         app: csi-s3-node
+        app.kubernetes.io/part-of: minio-csi-s3
     spec:
       serviceAccountName: csi-s3
       containers:
@@ -19,7 +20,8 @@ spec:
           args:
             - "--endpoint=unix://$(CSI_ADDRESS)"
             - "--nodeid=$(NODE_ID)"
-            - "--mountBinary=/bin/mount"
+            - "--mountBinary=/usr/local/bin/mount-s3"
+            - "--v=4"
           env:
             - name: CSI_ADDRESS
               value: /run/csi/csi.sock
@@ -35,6 +37,18 @@ spec:
               value: csi-s3-config
             - name: SECRET_NAME
               value: csi-s3-secret
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: csi-s3-secret
+                  key: MINIO_ACCESSKEY
+                  optional: true
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: csi-s3-secret
+                  key: MINIO_SECRETKEY
+                  optional: true
           securityContext:
             privileged: true
             runAsUser: 0

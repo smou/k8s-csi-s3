@@ -1,24 +1,40 @@
 # CSI for S3
 
 This is a Container Storage Interface ([CSI](https://github.com/container-storage-interface/spec/blob/master/spec.md)) for S3 (or S3 compatible) storage. This can dynamically allocate buckets and mount them via a fuse mount into any container.
+It implements the same mouting mechanism as the csi driver from aws and is not using any third party fs implementation (e.g. s3-fs)
 
 ## Kubernetes installation
 
 ### Requirements
 
-* Kubernetes 1.17+
+* Kubernetes 1.33+
 * Kubernetes has to allow privileged containers
 * Docker daemon must allow shared mounts (systemd flag `MountFlags=shared`)
 
 ### Helm chart
-
+//TODO Not available yet
 Helm chart is published at `https://smou.github.io/k8s-csi-s3`:
 
 ```
-helm repo add yandex-s3 https://smou.github.io/k8s-csi-s3/charts
+helm repo add minio-csi-s3 https://smou.github.io/k8s-csi-s3/charts
 
 helm install csi-s3 yandex-s3/csi-s3
 ```
+
+### Configuration
+
+The driver will load the configmap and secret via the kubernetes api and requires related permissions to be able to access the kubernetes resources
+
+| Name             | Type         | Required | Default      | Description                                         |
+| :--------------- | :----------- | :------: | :----------- | :-------------------------------------------------- |
+| MINIO_ENDPOINT   | ConfigMap    | True     | -            | URL of the targeting minio instance. Https will automatically enable TLS |
+| MINIO_REGION     | ConfigMap    | False    | us-east-1    | S3 region of the bucket. For compatibility only. Take no effekt for minio |
+| MINIO_BUCKET_PREFIX | ConfigMap | False    | ""           | prefix for each bucket name. The bucket name will be equal to volume id 'pvc-UUID' |
+| MINIO_ACCESSKEY  | Secret | True | - | Equal to AWS_ACCESS_KEY_ID |
+| MINIO_SECRETKEY | Secret | True | - | Equal to AWS_SECRET_ACCESS_KEY |
+| NAMESPACE | Env | True | "" | Namespace where is loading the configmap and secret from |
+| CONFIGMAP_NAME | Env | True | "" | Name of the config map |
+| SECRET_NAME | Env | True | "" | Name of the secret |
 
 ### Manual installation
 
@@ -29,52 +45,45 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: csi-s3-secret
-  # Namespace depends on the configuration in the storageclass.yaml
-  namespace: kube-system
+  namespace: csi-s3
+type: Opaque
 stringData:
-  accessKeyID: <YOUR_ACCESS_KEY_ID>
-  secretAccessKey: <YOUR_SECRET_ACCESS_KEY>
-  # For AWS set it to "https://s3.<region>.amazonaws.com", for example https://s3.eu-central-1.amazonaws.com
-  endpoint: https://storage.yandexcloud.net
-  # For AWS set it to AWS region
-  #region: ""
+  MINIO_ACCESSKEY: <YOUR_ACCESS_KEY_ID>
+  MINIO_SECRETKEY: <YOUR_SECRET_ACCESS_KEY>
 ```
 
-The region can be empty if you are using some other S3 compatible storage.
+#### 2. Updating ConfigMap with your configuration
 
-#### 2. Deploy the driver
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: csi-s3-config
+  namespace: csi-s3
+  labels:
+    app.kubernetes.io/part-of: minio-csi-s3
+data:
+  MINIO_ENDPOINT: "https://minio.mydomain.com"
+```
+
+#### 3. Deploy the driver
 
 ```bash
-cd deploy/kubernetes
-kubectl create -f provisioner.yaml
-kubectl create -f driver.yaml
-kubectl create -f csi-s3.yaml
+kubectl apply -k ./k8s
 ```
 
 ##### Upgrading
 
-If you're upgrading from <= 0.35.5 - delete all resources from `attacher.yaml`:
-
-```
-wget https://raw.githubusercontent.com/smou/k8s-csi-s3/v0.35.5/deploy/kubernetes/attacher.yaml
-kubectl delete -f attacher.yaml
-```
-
-If you're upgrading from <= 0.40.6 - delete all resources from old `provisioner.yaml`:
-
-```bash
-wget -O old-provisioner.yaml https://raw.githubusercontent.com/smou/k8s-csi-s3/v0.40.6/deploy/kubernetes/provisioner.yaml
-kubectl delete -f old-provisioner.yaml
-```
-
-Then reapply `csi-s3.yaml`, `driver.yaml` and `provisioner.yaml`:
-
-```bash
-cd deploy/kubernetes
-kubectl apply -f provisioner.yaml
-kubectl apply -f driver.yaml
-kubectl apply -f csi-s3.yaml
-```
+If you're upgrading from yandex-cloud/k8s-csi-s3 - delete all resources:
+- Deployment
+- DeamonSet
+- StorageClass
+- CSIDriver
+- RBAC (or Update)
+  - ServiceAccount
+  - ClusterRole
+  - ClusterRoleBindings
+Migrate Config and Secrets
 
 #### 3. Create the storage class
 
@@ -87,21 +96,21 @@ kubectl create -f examples/storageclass.yaml
 1. Create a pvc using the new storage class:
 
     ```bash
-    kubectl create -f examples/pvc.yaml
+    kubectl apply -f k8s/test/pvc.yaml
     ```
 
 1. Check if the PVC has been bound:
 
     ```bash
-    $ kubectl get pvc csi-s3-pvc
+    $ kubectl get pvc s3-pvc
     NAME         STATUS    VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   AGE
-    csi-s3-pvc   Bound     pvc-c5d4634f-8507-11e8-9f33-0e243832354b   5Gi        RWO            csi-s3         9s
+    s3-pvc       Bound     pvc-c5d4634f-8507-11e8-9f33-0e243832354b   1Gi        RWO            s3-standard    9s
     ```
 
 1. Create a test pod which mounts your volume:
 
     ```bash
-    kubectl create -f examples/pod.yaml
+    kubectl apply -f k8s/test/pod.yaml
     ```
 
     If the pod can start, everything should be working.
@@ -121,21 +130,8 @@ If something does not work as expected, check the troubleshooting section below.
 
 ### Bucket
 
-By default, csi-s3 will create a new bucket per volume. The bucket name will match that of the volume ID. If you want your volumes to live in a precreated bucket, you can simply specify the bucket in the storage class parameters:
-
-```yaml
-kind: StorageClass
-apiVersion: storage.k8s.io/v1
-metadata:
-  name: csi-s3-existing-bucket
-provisioner: ru.yandex.s3.csi
-parameters:
-  mounter: geesefs
-  options: "--memory-limit 1000 --dir-mode 0777 --file-mode 0666"
-  bucket: some-existing-bucket-name
-```
-
-If the bucket is specified, it will still be created if it does not exist on the backend. Every volume will get its own prefix within the bucket which matches the volume ID. When deleting a volume, also just the prefix will be deleted.
+minio-csi-s3 will create a new bucket per volume. The bucket name will match that of the volume ID. If you want to have the bucketname prefixed by a custom value
+you need to set 'MINIO_BUCKET_PREFIX'
 
 ### Static Provisioning
 
@@ -157,37 +153,14 @@ Also depending on what S3 storage backend you are using there are not always [co
 
 You can check POSIX compatibility matrix here: https://github.com/smou/geesefs#posix-compatibility-matrix.
 
-#### GeeseFS
-
-* Almost full POSIX compatibility
-* Good performance for both small and big files
-* Does not store file permissions and custom modification times
-* By default runs **outside** of the csi-s3 container using systemd, to not crash
-  mountpoints with "Transport endpoint is not connected" when csi-s3 is upgraded
-  or restarted. Add `--no-systemd` to `parameters.options` of the `StorageClass`
-  to disable this behaviour.
-
-#### s3fs
-
-* Almost full POSIX compatibility
-* Good performance for big files, poor performance for small files
-* Very slow for directories with a large number of files
-
-#### rclone
-
-* Poor POSIX compatibility
-* Bad performance for big files, okayish performance for small files
-* Doesn't create directory objects like s3fs or GeeseFS
-* May hang :-)
-
 ## Troubleshooting
 
 ### Issues while creating PVC
 
-Check the logs of the provisioner:
+Check the logs of the controller:
 
 ```bash
-kubectl logs -l app=csi-provisioner-s3 -c csi-s3
+kubectl logs -l app.kubernetes.io/part-of=minio-csi-s3 -c csi-s3-controller
 ```
 
 ### Issues creating containers
@@ -196,7 +169,7 @@ kubectl logs -l app=csi-provisioner-s3 -c csi-s3
 2. Check the logs of the s3-driver:
 
 ```bash
-kubectl logs -l app=csi-s3 -c csi-s3
+kubectl logs -l app.kubernetes.io/part-of=minio-csi-s3 -c csi-s3
 ```
 
 ## Development
@@ -214,8 +187,6 @@ make build
 ```
 
 ### Tests
-
-Currently the driver is tested by the [CSI Sanity Tester](https://github.com/kubernetes-csi/csi-test/tree/master/pkg/sanity). As end-to-end tests require S3 storage and a mounter like s3fs, this is best done in a docker container. A Dockerfile and the test script are in the `test` directory. The easiest way to run the tests is to just use the make command:
 
 ```bash
 make test
