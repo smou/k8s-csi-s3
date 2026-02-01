@@ -61,6 +61,8 @@ func (p *MountUtilsProvider) Mount(ctx context.Context, req MountRequest) error 
 		"--force-path-style",   // Force path-style addressing
 		"--incremental-upload", // Enable incremental uploads and support for appending to existing objects
 		"--allow-other",        // FUSE option to Allow other users, including root, to access file system
+		"--allow-delete",
+		"--allow-overwrite",
 	}
 	if req.GID != "" {
 		options = append(options,
