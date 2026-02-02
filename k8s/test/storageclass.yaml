@@ -4,6 +4,8 @@ metadata:
   name: s3-standard
   annotations:
     storageclass.kubernetes.io/is-default-class: "true"
+  labels:
+    app.kubernetes.io/part-of: minio-csi-s3
 provisioner: minio.s3.csi
 parameters:
   region: us-east-1

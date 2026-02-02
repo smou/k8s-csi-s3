@@ -6,8 +6,11 @@ name: Go Build & Push
 on:
   push:
     branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
+    paths:
+      - pkg/**
+      - cmd/**
+      - Dockerfile
+      - Makefile
 
 jobs:
   build:
@@ -26,4 +29,4 @@ jobs:
       with:
         push: true
         context: .
-        tags: cshoch3/k8s-csi-s3-minio:0.43.3        
+        tags: cshoch3/k8s-csi-s3-minio:1.0.0        
