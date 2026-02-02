@@ -17,29 +17,81 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"os/signal"
+	"syscall"
 
+	"github.com/smou/k8s-csi-s3/pkg/config"
 	"github.com/smou/k8s-csi-s3/pkg/driver"
+	"k8s.io/klog/v2"
 )
 
 func init() {
-	flag.Set("logtostderr", "true")
+
 }
 
 var (
-	endpoint = flag.String("endpoint", "unix://tmp/csi.sock", "CSI endpoint")
-	nodeID   = flag.String("nodeid", "", "node id")
+	endpoint    = flag.String("endpoint", "unix://csi/csi.sock", "CSI endpoint")
+	nodeID      = flag.String("nodeid", "controller", "kubernetes node id")
+	mountBinary = flag.String("mountBinary", "/usr/local/bin/mount-s3", "s3 mount binary path")
 )
 
 func main() {
-	flag.Parse()
+	klog.InitFlags(nil)
 
-	driver, err := driver.New(*nodeID, *endpoint)
+	flag.Set("logtostderr", "true")
+	flag.Parse()
+	defer klog.Flush()
+
+	ctx, cancel := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer cancel()
+
+	config, err := config.InitConfig(ctx)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error loading DriverConfig: %v", err)
 	}
-	driver.Run()
+	config.Endpoint = *endpoint
+	config.NodeID = *nodeID
+	config.MountBinary = *mountBinary
+	if err := preflightChecks(config); err != nil {
+		log.Fatalf("Preflight checks failed: %v", err)
+	}
+	runDriver(config, ctx)
 	os.Exit(0)
+}
+
+func runDriver(config *config.DriverConfig, ctx context.Context) {
+	driver, err := driver.NewDriver(config)
+	if err != nil {
+		log.Fatalf("Error init Driver: %v", err)
+	}
+	go func() {
+		if err := driver.Run(); err != nil {
+			log.Fatalf("driver error: %v", err)
+		}
+	}()
+	<-ctx.Done()
+	driver.Stop()
+}
+
+func preflightChecks(config *config.DriverConfig) error {
+	if config.MountBinary != "" {
+		if _, err := os.Stat(config.MountBinary); os.IsNotExist(err) {
+			return fmt.Errorf("mount binary not found in $PATH at %s: %v", config.MountBinary, err)
+		}
+	} else {
+		if _, err := exec.LookPath("mount-s3"); os.IsNotExist(err) {
+			return fmt.Errorf("mount-s3 binary not found in $PATH: %v", err)
+		}
+	}
+	return nil
 }

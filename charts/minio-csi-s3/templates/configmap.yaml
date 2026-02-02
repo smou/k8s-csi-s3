@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "driver.configmap.name" . }}
+  namespace: {{ include "driver.namespace.name" . }}
+  labels:
+  {{- if (include "driver.labels" .) }}
+  {{- include "driver.labels" . | indent 4}}
+  {{- end }}
+data:
+  MINIO_ENDPOINT: {{ required "S3 Endpoint must not be null or empty" .Values.s3.endpoint | quote }}
+  {{- if .Values.s3.region }}
+  MINIO_REGION: {{ .Values.s3.region | quote}}
+  {{- end }}
+  {{- if .Values.s3.bucketPrefix}}
+  MINIO_BUCKET_PREFIX: {{ .Values.s3.bucketPrefix | quote}}
+  {{- end }}

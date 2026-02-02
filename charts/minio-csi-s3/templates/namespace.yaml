@@ -1,0 +1,14 @@
+{{- if eq (include "driver.namespace.create" .) "true" }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "driver.namespace.name" . }}
+  labels:
+  {{- if (include "driver.labels" .) }}
+  {{- include "driver.namespace.labels" . | indent 4}}
+  {{- end }}
+  annotations:
+  {{- if (include "driver.labels" .) }}
+  {{- include "driver.namespace.annotations" . | indent 4}}
+  {{- end }}
+{{- end }}

@@ -17,182 +17,153 @@ limitations under the License.
 package driver
 
 import (
+	"context"
+
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"k8s.io/klog/v2"
+
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
 	"io"
-	"path"
 	"strings"
 
-	"github.com/golang/glog"
-	"github.com/smou/k8s-csi-s3/pkg/mounter"
-	"github.com/smou/k8s-csi-s3/pkg/s3"
-	"golang.org/x/net/context"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
-	"github.com/container-storage-interface/spec/lib/go/csi"
-	csicommon "github.com/kubernetes-csi/drivers/pkg/csi-common"
+	"github.com/smou/k8s-csi-s3/pkg/config"
+	"github.com/smou/k8s-csi-s3/pkg/driver/store"
 )
 
-type controllerServer struct {
-	*csicommon.DefaultControllerServer
+type ControllerServer struct {
+	csi.UnimplementedControllerServer
+
+	Store        store.BucketStore
+	Endpoint     string
+	Region       string
+	BucketPrefix string
 }
 
-func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
-	params := req.GetParameters()
+func NewControllerServer(config *config.DriverConfig, store store.BucketStore) *ControllerServer {
+	klog.Infof("Initializing ControllerServer...")
+	return &ControllerServer{
+		Store:        store,
+		Endpoint:     config.S3.Endpoint,
+		Region:       config.S3.Region,
+		BucketPrefix: config.S3.BucketPrefix,
+	}
+}
+
+func (srv *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+	klog.V(4).Infof("CreateVolume: called with args %#v", req)
+
+	volumeName := req.GetName()
+	if volumeName == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume name missing")
+	}
+
+	if len(req.GetVolumeCapabilities()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "volume capabilities missing")
+	}
+
 	capacityBytes := int64(req.GetCapacityRange().GetRequiredBytes())
 	volumeID := sanitizeVolumeID(req.GetName())
 	bucketName := volumeID
-	prefix := ""
-
-	// check if bucket name is overridden
-	if params[mounter.BucketKey] != "" {
-		bucketName = params[mounter.BucketKey]
-		prefix = volumeID
-		volumeID = path.Join(bucketName, prefix)
-	}
-
-	if err := cs.Driver.ValidateControllerServiceRequest(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME); err != nil {
-		glog.V(3).Infof("invalid create volume req: %v", req)
-		return nil, err
+	if srv.BucketPrefix != "" {
+		bucketName = fmt.Sprintf("%s-%s", srv.BucketPrefix, volumeID)
 	}
 
 	// Check arguments
-	if len(volumeID) == 0 {
+	if len(bucketName) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "Name missing in request")
 	}
-	if req.GetVolumeCapabilities() == nil {
-		return nil, status.Error(codes.InvalidArgument, "Volume Capabilities missing in request")
+
+	klog.Infof("Got a request to create volume %s", bucketName)
+
+	if err := srv.Store.CreateBucket(ctx, bucketName); err != nil {
+		return nil, fmt.Errorf("failed to create bucket %s: %v", bucketName, err)
 	}
 
-	glog.V(4).Infof("Got a request to create volume %s", volumeID)
-
-	client, err := s3.NewClientFromSecret(req.GetSecrets())
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize S3 client: %s", err)
-	}
-
-	exists, err := client.BucketExists(bucketName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check if bucket %s exists: %v", volumeID, err)
-	}
-
-	if !exists {
-		if err = client.CreateBucket(bucketName); err != nil {
-			return nil, fmt.Errorf("failed to create bucket %s: %v", bucketName, err)
-		}
-	}
-
-	if err = client.CreatePrefix(bucketName, prefix); err != nil {
-		return nil, fmt.Errorf("failed to create prefix %s: %v", prefix, err)
-	}
-
-	glog.V(4).Infof("create volume %s", volumeID)
+	//TODO handle prefixes
 	// DeleteVolume lacks VolumeContext, but publish&unpublish requests have it,
 	// so we don't need to store additional metadata anywhere
 	context := make(map[string]string)
-	for k, v := range params {
-		context[k] = v
-	}
+	// for k, v := range params {
+	// 	context[k] = v
+	// }
+	klog.V(1).Infof("Volume %s created for region %s with capacity %v", volumeID, srv.Region, capacityBytes)
 	context["capacity"] = fmt.Sprintf("%v", capacityBytes)
+	context["region"] = srv.Region
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
-			VolumeId:      volumeID,
+			VolumeId:      bucketName,
 			CapacityBytes: capacityBytes,
 			VolumeContext: context,
 		},
 	}, nil
 }
 
-func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
+func (srv *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
+	klog.V(4).Infof("DeleteVolume: called with args %#v", req)
 	volumeID := req.GetVolumeId()
-	bucketName, prefix := volumeIDToBucketPrefix(volumeID)
+	if volumeID == "" {
+		return &csi.DeleteVolumeResponse{}, nil
+	}
 
 	// Check arguments
 	if len(volumeID) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
 	}
 
-	if err := cs.Driver.ValidateControllerServiceRequest(csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME); err != nil {
-		glog.V(3).Infof("Invalid delete volume req: %v", req)
-		return nil, err
-	}
-	glog.V(4).Infof("Deleting volume %s", volumeID)
+	klog.Infof("Deleting volume %s", volumeID)
 
-	client, err := s3.NewClientFromSecret(req.GetSecrets())
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize S3 client: %s", err)
+	if err := srv.Store.DeleteBucket(ctx, volumeID); err != nil && err.Error() != "The specified bucket does not exist" {
+		return nil, status.Errorf(
+			codes.Internal,
+			"Failed to delete bucket %s: %v",
+			volumeID,
+			err,
+		)
 	}
-
-	var deleteErr error
-	if prefix == "" {
-		// prefix is empty, we delete the whole bucket
-		if err := client.RemoveBucket(bucketName); err != nil && err.Error() != "The specified bucket does not exist" {
-			deleteErr = err
-		}
-		glog.V(4).Infof("Bucket %s removed", bucketName)
-	} else {
-		if err := client.RemovePrefix(bucketName, prefix); err != nil {
-			deleteErr = fmt.Errorf("unable to remove prefix: %w", err)
-		}
-		glog.V(4).Infof("Prefix %s removed", prefix)
-	}
-
-	if deleteErr != nil {
-		return nil, deleteErr
-	}
-
+	klog.Infof("Bucket %s removed", volumeID)
 	return &csi.DeleteVolumeResponse{}, nil
 }
 
-func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
-	// Check arguments
-	if len(req.GetVolumeId()) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
+func (srv *ControllerServer) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+	klog.V(4).Infof("ControllerGetCapabilities: called with args %#v", req)
+	caps := []csi.ControllerServiceCapability_RPC_Type{
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
 	}
-	if req.GetVolumeCapabilities() == nil {
-		return nil, status.Error(codes.InvalidArgument, "Volume capabilities missing in request")
+	var capsResponse []*csi.ControllerServiceCapability
+	for _, cap := range caps {
+		c := &csi.ControllerServiceCapability{
+			Type: &csi.ControllerServiceCapability_Rpc{
+				Rpc: &csi.ControllerServiceCapability_RPC{
+					Type: cap,
+				},
+			},
+		}
+		capsResponse = append(capsResponse, c)
 	}
-	bucketName, _ := volumeIDToBucketPrefix(req.GetVolumeId())
+	return &csi.ControllerGetCapabilitiesResponse{Capabilities: capsResponse}, nil
+}
 
-	client, err := s3.NewClientFromSecret(req.GetSecrets())
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize S3 client: %s", err)
-	}
-	exists, err := client.BucketExists(bucketName)
-	if err != nil {
-		return nil, err
-	}
+func (srv *ControllerServer) ValidateVolumeCapabilities(ctx context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
+	klog.V(4).Infof("ValidateVolumeCapabilities: called with args %#v", req)
 
-	if !exists {
-		// return an error if the bucket of the requested volume does not exist
-		return nil, status.Error(codes.NotFound, fmt.Sprintf("bucket of volume with id %s does not exist", req.GetVolumeId()))
-	}
-
-	supportedAccessMode := &csi.VolumeCapability_AccessMode{
-		Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
-	}
-
-	for _, capability := range req.VolumeCapabilities {
-		if capability.GetAccessMode().GetMode() != supportedAccessMode.GetMode() {
-			return &csi.ValidateVolumeCapabilitiesResponse{Message: "Only single node writer is supported"}, nil
+	for _, cap := range req.VolumeCapabilities {
+		if cap.GetMount() == nil {
+			return &csi.ValidateVolumeCapabilitiesResponse{
+				Message: "only filesystem volumes supported",
+			}, nil
 		}
 	}
 
 	return &csi.ValidateVolumeCapabilitiesResponse{
 		Confirmed: &csi.ValidateVolumeCapabilitiesResponse_Confirmed{
-			VolumeCapabilities: []*csi.VolumeCapability{
-				{
-					AccessMode: supportedAccessMode,
-				},
-			},
+			VolumeCapabilities: req.VolumeCapabilities,
 		},
 	}, nil
-}
-
-func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
-	return &csi.ControllerExpandVolumeResponse{}, status.Error(codes.Unimplemented, "ControllerExpandVolume is not implemented")
 }
 
 func sanitizeVolumeID(volumeID string) string {
@@ -203,17 +174,4 @@ func sanitizeVolumeID(volumeID string) string {
 		volumeID = hex.EncodeToString(h.Sum(nil))
 	}
 	return volumeID
-}
-
-// volumeIDToBucketPrefix returns the bucket name and prefix based on the volumeID.
-// Prefix is empty if volumeID does not have a slash in the name.
-func volumeIDToBucketPrefix(volumeID string) (string, string) {
-	// if the volumeID has a slash in it, this volume is
-	// stored under a certain prefix within the bucket.
-	splitVolumeID := strings.SplitN(volumeID, "/", 2)
-	if len(splitVolumeID) > 1 {
-		return splitVolumeID[0], splitVolumeID[1]
-	}
-
-	return volumeID, ""
 }

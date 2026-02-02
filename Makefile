@@ -11,31 +11,42 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-.PHONY: test build container push clean
 
-REGISTRY_NAME=cr.yandex/crp9ftr22d26age3hulg
-REGISTRY_NAME2=cr.il.nebius.cloud/crll7us9n6i5j3v4n92m
-IMAGE_NAME=csi-s3
-IMAGE_NAME2=smou/csi-s3/csi-s3-driver
-VERSION ?= 0.43.3
-IMAGE_TAG=$(REGISTRY_NAME)/$(IMAGE_NAME):$(VERSION)
-TEST_IMAGE_TAG=$(IMAGE_NAME):test
+SHELL = /bin/bash
+VERSION=1.0.0
+NAME=minio.s3.csi
+GIT_COMMIT?=$(shell git rev-parse HEAD)
+BUILD_DATE?=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+PKG=github.com/smou/k8s-csi-s3
 
-build:
-	CGO_ENABLED=0 GOOS=linux go build -a -ldflags '-extldflags "-static"' -o _output/s3driver ./cmd/s3driver
+LDFLAGS?="-w -s -X ${PKG}/pkg/driver/version.driverVersion=${VERSION} \
+-X ${PKG}/pkg/driver/version.driverName=${NAME} \
+-X ${PKG}/pkg/driver/version.gitCommit=${GIT_COMMIT} \
+-X ${PKG}/pkg/driver/version.buildDate=${BUILD_DATE}"
+
+GOOS=$(shell go env GOOS)
+CGO_ENABLED=0
+GOFLAGS := -a
+GOENV := CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=amd64
+
+BINARY_NAME := s3driver
+SRC_DIR := $(shell pwd)/cmd/s3driver
+PKG_DIR := $(shell pwd)/pkg
+OUTPUT_DIR := $(shell pwd)/_output
+
+.PHONY: sync test build clean
+all: sync test build
+sync:
+	@echo "==> Syncing dependencies"
+	go mod tidy
 test:
-	docker build -t $(TEST_IMAGE_TAG) -f test/Dockerfile .
-	docker run --rm --privileged -v $(PWD):/build --device /dev/fuse $(TEST_IMAGE_TAG)
-container:
-	docker build -t $(IMAGE_TAG) .
-# push: container
-# 	docker tag $(IMAGE_TAG) $(REGISTRY_NAME)/$(IMAGE_NAME):latest
-# 	docker tag $(IMAGE_TAG) $(REGISTRY_NAME)/$(IMAGE_NAME2):$(VERSION)
-# 	docker tag $(IMAGE_TAG) $(REGISTRY_NAME)/$(IMAGE_NAME2):latest
-# 	docker push $(IMAGE_TAG)
-# 	docker push $(REGISTRY_NAME)/$(IMAGE_NAME)
-# 	docker push $(REGISTRY_NAME)/$(IMAGE_NAME2)
-# 	docker push $(REGISTRY_NAME)/$(IMAGE_NAME2):$(VERSION)
+	@echo "==> Running unit tests"
+	go test ${PKG_DIR}/... ${GOFLAGS} -v -race
+build: clean
+	@echo "==> Building binary"
+	mkdir -p $(OUTPUT_DIR)
+	${GOENV} go build ${GOFLAGS} -ldflags ${LDFLAGS} -o ${OUTPUT_DIR}/${BINARY_NAME} ${SRC_DIR}
 clean:
+	@echo "==> Cleaning"
 	go clean -r -x
-	-rm -rf _output
+	rm -rf $(OUTPUT_DIR)/*

@@ -1,0 +1,12 @@
+version: 1.0.0
+verbose: 4
+#nameOverride: "k8s-csi-s3-minio"
+
+s3:
+  endpoint: "https://aistor.lan.cschuetze.de"
+  #region: "us-east-1"
+  #bucketPrefix: "csi-s3-"
+
+# namespace:
+#   create: true
+#   name: "minio-csi-s3"

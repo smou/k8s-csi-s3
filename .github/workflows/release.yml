@@ -1,21 +1,31 @@
-name: Release
+name: Release Charts
 
 on:
   push:
-    tags:
-    - "v*"
+    branches: [ "master" ]
+    paths:
+      - charts/**
 
 jobs:
-
-  build:
+  release:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
 
-    - name: Push Docker
-      run: (echo '${{ secrets.REGISTRY_KEY }}' | docker login --username json_key --password-stdin cr.yandex) && make push
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
-    - uses: "marvinpinto/action-automatic-releases@latest"
-      with:
-        repo_token: "${{ secrets.GITHUB_TOKEN }}"
-        prerelease: false
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.7.0
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+        with:
+          mark_as_latest: true
+          pages_branch: master
