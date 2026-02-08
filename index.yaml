@@ -2,6 +2,26 @@ apiVersion: v1
 entries:
   minio-csi-s3:
   - apiVersion: v1
+    appVersion: 1.1.1
+    created: "2026-02-08T15:41:42.936536252Z"
+    description: An open source kubernetes minio-csi-s3 driver for S3 compatible object
+      storage, tested with MinIO / AIStore Object Storage.
+    digest: f450de745ff11ed6335471bc55b72a87986d5c08a771c36b4ac6b29faa6c2748
+    keywords:
+    - kuberetes
+    - csi
+    - s3
+    - minio
+    maintainers:
+    - email: smou@gmail.com
+      name: Christopher Schütze
+    name: minio-csi-s3
+    sources:
+    - https://github.com/smou/minio-csi-s3
+    urls:
+    - https://github.com/smou/minio-csi-s3/releases/download/minio-csi-s3-1.0.4/minio-csi-s3-1.0.4.tgz
+    version: 1.0.4
+  - apiVersion: v1
     appVersion: 1.1.0
     created: "2026-02-08T15:33:45.956648282Z"
     description: An open source kubernetes minio-csi-s3 driver for S3 compatible object
@@ -81,4 +101,4 @@ entries:
     urls:
     - https://github.com/smou/k8s-csi-s3/releases/download/minio-csi-s3-1.0.0/minio-csi-s3-1.0.0.tgz
     version: 1.0.0
-generated: "2026-02-08T15:33:45.9566636Z"
+generated: "2026-02-08T15:41:42.936560467Z"
